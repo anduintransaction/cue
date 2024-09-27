@@ -50,6 +50,8 @@ var ErrNotFound = fmt.Errorf("module not found")
 // provides a store for CUE modules.
 type Client struct {
 	resolver Resolver
+
+	anduin *anduinPatch
 }
 
 // Resolver resolves module paths to a registry and a location
@@ -95,17 +97,25 @@ const (
 // NewClient returns a new client that talks to the registry at the given
 // hostname.
 func NewClient(registry ociregistry.Interface) *Client {
-	return &Client{
+	c := &Client{
 		resolver: singleResolver{registry},
 	}
+	c.anduin = &anduinPatch{
+		originalClient: c,
+	}
+	return c
 }
 
 // NewClientWithResolver returns a new client that uses the given
 // resolver to decide which registries to fetch from or push to.
 func NewClientWithResolver(resolver Resolver) *Client {
-	return &Client{
+	c := &Client{
 		resolver: resolver,
 	}
+	c.anduin = &anduinPatch{
+		originalClient: c,
+	}
+	return c
 }
 
 // Mirror ensures that the given module and its component parts
@@ -363,7 +373,7 @@ func (c *Client) PutModuleWithMetadata(ctx context.Context, m module.Version, r 
 	if err != nil {
 		return err
 	}
-	return c.putCheckedModule(ctx, cm, meta)
+	return c.anduin.putCheckedModule(ctx, cm, meta)
 }
 
 // checkModule checks a module's zip file before uploading it.

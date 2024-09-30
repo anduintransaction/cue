@@ -70,7 +70,7 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 			}
 
 			// only add cue file to repack zip
-			if strings.HasSuffix(zf.Name, ".cue") {
+			if shouldRepackFile(zf) {
 				if err := addFileToRepack(zw, zf.Name, bytes.NewReader(data)); err != nil {
 					return err
 				}
@@ -119,6 +119,10 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 	m.zipr = zr
 
 	return orasLayers, nil
+}
+
+func shouldRepackFile(zf *zip.File) bool {
+	return strings.HasSuffix(zf.Name, ".cue") || strings.ToLower(zf.Name) == "license"
 }
 
 func addFileToRepack(zr *zip.Writer, name string, r io.Reader) error {

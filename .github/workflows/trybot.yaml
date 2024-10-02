@@ -137,7 +137,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: End-to-end test
         env:
-          CUE_TEST_LOGINS: ${{ secrets.E2E_CUE_LOGINS }}
+          CUE_TEST_LOGINS: ${{ secrets.E2E_PORCUEPINE_CUE_LOGINS }}
         if: |-
           github.repository == 'cue-lang/cue' && (((github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/release-branch.')) && (! (contains(github.event.head_commit.message, '
           Dispatch-Trailer: {"type":"')))) || (github.ref == 'refs/heads/ci/test')) && (matrix.go-version == '1.23.x' && matrix.runner == 'ubuntu-22.04')
@@ -167,7 +167,12 @@ jobs:
           	exit 1
           fi
       - name: Generate
-        run: go generate ./...
+        env:
+          CUE_LOGINS: ${{ secrets.NOTCUECKOO_CUE_LOGINS }}
+        run: |-
+          export CUE_CONFIG_DIR=$(mktemp -d)
+          echo "$CUE_LOGINS" > $CUE_CONFIG_DIR/logins.json
+          go generate ./...
         if: (matrix.go-version == '1.23.x' && matrix.runner == 'ubuntu-22.04')
       - name: Check that git is clean at the end of the job
         if: always()

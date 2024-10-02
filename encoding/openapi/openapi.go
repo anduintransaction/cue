@@ -91,11 +91,19 @@ func Gen(inst cue.InstanceOrValue, c *Config) ([]byte, error) {
 	if c == nil {
 		c = defaultConfig
 	}
-	all, err := c.All(inst)
+	all, err := schemas(c, inst)
 	if err != nil {
 		return nil, err
 	}
-	return internaljson.Marshal(all)
+	top, err := c.compose(inst, all)
+	if err != nil {
+		return nil, err
+	}
+	topValue := inst.Value().Context().BuildExpr(top)
+	if err := topValue.Err(); err != nil {
+		return nil, err
+	}
+	return internaljson.Marshal(topValue)
 }
 
 // Generate generates the set of OpenAPI schema for all top-level types of the
@@ -103,6 +111,9 @@ func Gen(inst cue.InstanceOrValue, c *Config) ([]byte, error) {
 //
 // Note: only a limited number of top-level types are supported so far.
 func Generate(inst cue.InstanceOrValue, c *Config) (*ast.File, error) {
+	if c == nil {
+		c = defaultConfig
+	}
 	all, err := schemas(c, inst)
 	if err != nil {
 		return nil, err
@@ -112,19 +123,6 @@ func Generate(inst cue.InstanceOrValue, c *Config) (*ast.File, error) {
 		return nil, err
 	}
 	return &ast.File{Decls: top.Elts}, nil
-}
-
-// All generates an OpenAPI definition from the given instance.
-//
-// Note: only a limited number of top-level types are supported so far.
-// Deprecated: use Generate
-func (g *Generator) All(inst cue.InstanceOrValue) (*OrderedMap, error) {
-	all, err := schemas(g, inst)
-	if err != nil {
-		return nil, err
-	}
-	top, err := g.compose(inst, all)
-	return (*OrderedMap)(top), err
 }
 
 func toCUE(name string, x interface{}) (v ast.Expr, err error) {
@@ -174,7 +172,6 @@ func (c *Config) compose(inst cue.InstanceOrValue, schemas *ast.StructLit) (x *a
 		}
 	}
 
-	// Support of OrderedMap is mostly for backwards compatibility.
 	switch x := c.Info.(type) {
 	case nil:
 		if title == "" {
@@ -198,17 +195,13 @@ func (c *Config) compose(inst cue.InstanceOrValue, schemas *ast.StructLit) (x *a
 				"version", ast.NewString(version),
 			)
 		} else {
-			m := (*OrderedMap)(info)
-			m.Set("title", ast.NewString(title))
-			m.Set("version", ast.NewString(version))
+			m := (*orderedMap)(info)
+			m.setExpr("title", ast.NewString(title))
+			m.setExpr("version", ast.NewString(version))
 		}
 
 	case *ast.StructLit:
 		info = x
-	case *OrderedMap:
-		info = (*ast.StructLit)(x)
-	case OrderedMap:
-		info = (*ast.StructLit)(&x)
 	default:
 		x, err := toCUE("info section", x)
 		if err != nil {
@@ -228,15 +221,6 @@ func (c *Config) compose(inst cue.InstanceOrValue, schemas *ast.StructLit) (x *a
 		"paths", ast.NewStruct(),
 		"components", ast.NewStruct("schemas", schemas),
 	), errs
-}
-
-// Schemas extracts component/schemas from the CUE top-level types.
-func (g *Generator) Schemas(inst cue.InstanceOrValue) (*OrderedMap, error) {
-	comps, err := schemas(g, inst)
-	if err != nil {
-		return nil, err
-	}
-	return (*OrderedMap)(comps), err
 }
 
 var defaultConfig = &Config{}

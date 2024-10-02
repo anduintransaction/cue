@@ -44,7 +44,7 @@ type buildContext struct {
 	descFunc      func(v cue.Value) string
 	fieldFilter   *regexp.Regexp
 
-	schemas *OrderedMap
+	schemas *orderedMap
 
 	// Track external schemas.
 	externalRefs map[string]*externalType
@@ -69,8 +69,6 @@ type externalType struct {
 	path  cue.Path
 	value cue.Value
 }
-
-type oaSchema = OrderedMap
 
 type typeFunc func(b *builder, a cue.Value)
 
@@ -105,7 +103,7 @@ func schemas(g *Generator, inst cue.InstanceOrValue) (schemas *ast.StructLit, er
 		structural:   g.ExpandReferences,
 		nameFunc:     g.NameFunc,
 		descFunc:     g.DescriptionFunc,
-		schemas:      &OrderedMap{},
+		schemas:      &orderedMap{},
 		externalRefs: map[string]*externalType{},
 		fieldFilter:  fieldFilter,
 	}
@@ -147,7 +145,7 @@ func schemas(g *Generator, inst cue.InstanceOrValue) (schemas *ast.StructLit, er
 		if ref == "" {
 			continue
 		}
-		c.schemas.Set(ref, c.build(sel, i.Value()))
+		c.schemas.setExpr(ref, c.build(sel, i.Value()))
 	}
 
 	// keep looping until a fixed point is reached.
@@ -168,7 +166,7 @@ func schemas(g *Generator, inst cue.InstanceOrValue) (schemas *ast.StructLit, er
 			last := len(sels) - 1
 			c.path = sels[:last]
 			name := sels[last]
-			c.schemas.Set(ext.ref, c.build(name, cue.Dereference(ext.value)))
+			c.schemas.setExpr(ext.ref, c.build(name, cue.Dereference(ext.value)))
 		}
 	}
 
@@ -726,13 +724,13 @@ func (b *builder) object(v cue.Value) {
 		b.setFilter("Schema", "required", ast.NewList(required...))
 	}
 
-	var properties *OrderedMap
+	var properties *orderedMap
 	if b.singleFields != nil {
 		properties = b.singleFields.getMap("properties")
 	}
 	hasProps := properties != nil
 	if !hasProps {
-		properties = &OrderedMap{}
+		properties = &orderedMap{}
 	}
 
 	for i, _ := v.Fields(cue.Optional(true), cue.Definitions(true)); i.Next(); {
@@ -752,9 +750,9 @@ func (b *builder) object(v cue.Value) {
 			if ref == "" {
 				continue
 			}
-			b.ctx.schemas.Set(ref, schema)
+			b.ctx.schemas.setExpr(ref, schema)
 		case !b.isNonCore() || len(schema.Elts) > 0:
-			properties.Set(label, schema)
+			properties.setExpr(label, schema)
 		}
 	}
 
@@ -1077,8 +1075,8 @@ type builder struct {
 	ctx          *buildContext
 	typ          string
 	format       string
-	singleFields *oaSchema
-	current      *oaSchema
+	singleFields *orderedMap
+	current      *orderedMap
 	allOf        []*ast.StructLit
 	deprecated   bool
 
@@ -1123,17 +1121,17 @@ func (b *builder) setType(t, format string) {
 	}
 }
 
-func setType(t *oaSchema, b *builder) {
+func setType(t *orderedMap, b *builder) {
 	if b.typ != "" {
 		if b.core == nil || (b.core.typ != b.typ && !b.ctx.structural) {
 			if !t.exists("type") {
-				t.Set("type", ast.NewString(b.typ))
+				t.setExpr("type", ast.NewString(b.typ))
 			}
 		}
 	}
 	if b.format != "" {
 		if b.core == nil || b.core.format != b.format {
-			t.Set("format", ast.NewString(b.format))
+			t.setExpr("format", ast.NewString(b.format))
 		}
 	}
 }
@@ -1149,25 +1147,25 @@ func (b *builder) setFilter(schema, key string, v ast.Expr) {
 // setSingle sets a value of which there should only be one.
 func (b *builder) setSingle(key string, v ast.Expr, drop bool) {
 	if b.singleFields == nil {
-		b.singleFields = &OrderedMap{}
+		b.singleFields = &orderedMap{}
 	}
 	if b.singleFields.exists(key) {
 		if !drop {
 			b.failf(cue.Value{}, "more than one value added for key %q", key)
 		}
 	}
-	b.singleFields.Set(key, v)
+	b.singleFields.setExpr(key, v)
 }
 
 func (b *builder) set(key string, v ast.Expr) {
 	if b.current == nil {
-		b.current = &OrderedMap{}
+		b.current = &orderedMap{}
 		b.allOf = append(b.allOf, (*ast.StructLit)(b.current))
 	} else if b.current.exists(key) {
-		b.current = &OrderedMap{}
+		b.current = &orderedMap{}
 		b.allOf = append(b.allOf, (*ast.StructLit)(b.current))
 	}
-	b.current.Set(key, v)
+	b.current.setExpr(key, v)
 }
 
 func (b *builder) kv(key string, value ast.Expr) *ast.StructLit {
@@ -1179,14 +1177,14 @@ func (b *builder) setNot(key string, value ast.Expr) {
 }
 
 func (b *builder) finish() *ast.StructLit {
-	var t *OrderedMap
+	var t *orderedMap
 
 	if b.filled != nil {
 		return b.filled
 	}
 	switch len(b.allOf) {
 	case 0:
-		t = &OrderedMap{}
+		t = &orderedMap{}
 
 	case 1:
 		hasRef := false
@@ -1197,7 +1195,7 @@ func (b *builder) finish() *ast.StructLit {
 			}
 		}
 		if !hasRef || b.singleFields == nil {
-			t = (*OrderedMap)(b.allOf[0])
+			t = (*orderedMap)(b.allOf[0])
 			break
 		}
 		fallthrough
@@ -1207,15 +1205,15 @@ func (b *builder) finish() *ast.StructLit {
 		for _, s := range b.allOf {
 			exprs = append(exprs, s)
 		}
-		t = &OrderedMap{}
-		t.Set("allOf", ast.NewList(exprs...))
+		t = &orderedMap{}
+		t.setExpr("allOf", ast.NewList(exprs...))
 	}
 	if b.singleFields != nil {
 		b.singleFields.Elts = append(b.singleFields.Elts, t.Elts...)
 		t = b.singleFields
 	}
 	if b.deprecated {
-		t.Set("deprecated", ast.NewBool(true))
+		t.setExpr("deprecated", ast.NewBool(true))
 	}
 	setType(t, b)
 	sortSchema((*ast.StructLit)(t))

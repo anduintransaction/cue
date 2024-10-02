@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
@@ -97,8 +98,13 @@ inside $CUE_CONFIG_DIR; see 'cue help environment'.
 				return fmt.Errorf("cannot obtain the OAuth2 token: %v", err)
 			}
 
-			_, err = cueconfig.UpdateRegistryLogin(loginsPath, host.Name, tok)
+			// For consistency, store timestamps in UTC.
+			tok.Expiry = tok.Expiry.UTC()
+			// OAuth2 measures expiry in seconds via the expires_in JSON wire format field,
+			// so any sub-second units add unnecessary verbosity.
+			tok.Expiry = tok.Expiry.Truncate(time.Second)
 
+			_, err = cueconfig.UpdateRegistryLogin(loginsPath, host.Name, tok)
 			if err != nil {
 				return fmt.Errorf("cannot store CUE registry logins: %v", err)
 			}

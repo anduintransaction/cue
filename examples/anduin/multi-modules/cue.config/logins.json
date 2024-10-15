@@ -1,0 +1,8 @@
+{
+  "registries": {
+    "localhost:5000": {
+      "access_token": "ZGV2OmFuZHVpbmRldg==",
+      "token_type": "basic"
+    }
+  }
+}

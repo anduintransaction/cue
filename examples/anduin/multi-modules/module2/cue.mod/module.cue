@@ -7,6 +7,7 @@ source: {
 }
 deps: {
 	"anduin.com/module1@v1": {
-		v: "v1.0.1"
+		v:       "v1.0.1"
+		default: true
 	}
 }

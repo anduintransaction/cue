@@ -16,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 
+	"cuelang.org/go/internal/mod/semver"
+	"cuelang.org/go/mod/modfile"
+	"cuelang.org/go/mod/module"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -142,6 +145,21 @@ func zipContentLayer(m *ocispec.Manifest) ocispec.Descriptor {
 func moduleFileLayer(m *ocispec.Manifest) ocispec.Descriptor {
 	layerLen := len(m.Layers)
 	return m.Layers[layerLen-1]
+}
+
+func validateModVersion(mv module.Version, mf *modfile.File) (string, bool) {
+	major := mf.MajorVersion()
+	if mv.Version() == "" || mv.Version() == "latest" {
+		return major, true
+	}
+
+	// original validation logic
+	wantMajor := semver.Major(mv.Version())
+	if major != wantMajor {
+		return major, false
+	}
+
+	return major, true
 }
 
 func logf(f string, a ...any) {

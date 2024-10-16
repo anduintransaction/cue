@@ -380,8 +380,7 @@ func checkModFile(m module.Version, f *zip.File) ([]byte, *modfile.File, error) 
 	if mf.QualifiedModule() != m.Path() {
 		return nil, nil, fmt.Errorf("module path %q found in %s does not match module path being published %q", mf.QualifiedModule(), f.Name, m.Path())
 	}
-	wantMajor := semver.Major(m.Version())
-	if major := mf.MajorVersion(); major != wantMajor {
+	if major, ok := validateModVersion(m, mf); !ok {
 		// This can't actually happen because the zip checker checks the major version
 		// that's being published to, so the above path check also implicitly checks that.
 		return nil, nil, fmt.Errorf("major version %q found in %s does not match version being published %q", major, f.Name, m.Version())
@@ -451,7 +450,7 @@ func (c *Client) resolve(m module.Version) (RegistryLocation, error) {
 		return RegistryLocation{}, fmt.Errorf("module %v unexpectedly resolved to empty location", m)
 	}
 	if loc.Tag == "" {
-		return RegistryLocation{}, fmt.Errorf("module %v unexpectedly resolved to empty tag", m)
+		loc.Tag = "latest"
 	}
 	return loc, nil
 }

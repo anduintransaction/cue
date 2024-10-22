@@ -1,4 +1,4 @@
-module: "anduin.com/module1@v1"
+module: "dev.anduintransact.com/module1@v1"
 
 source: kind: "self"
 

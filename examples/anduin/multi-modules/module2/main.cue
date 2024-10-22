@@ -1,8 +1,8 @@
 package module2
 
 import (
-	"anduin.com/module1"
-	"anduin.com/module1/submodules"
+	"dev.anduintransact.com/module1"
+	"dev.anduintransact.com/module1/submodules"
 )
 
 foo:  module1.data

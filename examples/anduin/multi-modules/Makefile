@@ -7,6 +7,10 @@ publish-module1:
 	cd ./module1 && \
 		../cue.sh mod publish v1.0.1
 
+publish-module2:
+	cd ./module2 && \
+		../cue.sh mod publish v1.0.0
+
 eval-module2:
 	cd ./module2 && \
 		../cue.sh mod tidy && \

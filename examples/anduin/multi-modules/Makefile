@@ -1,3 +1,6 @@
+MODULE_1_VERSION:=v1.0.3
+MODULE_2_VERSION:=v1.0.0
+
 nuke:
 	sudo rm -rf ./cue.cache/mod && \
 		rm -rf ./data/* && \
@@ -5,11 +8,11 @@ nuke:
 
 publish-module1:
 	cd ./module1 && \
-		../cue.sh mod publish v1.0.1
+		../cue.sh mod publish ${MODULE_1_VERSION}
 
 publish-module2:
 	cd ./module2 && \
-		../cue.sh mod publish v1.0.0
+		../cue.sh mod publish ${MODULE_2_VERSION}
 
 eval-module2:
 	cd ./module2 && \
@@ -18,4 +21,4 @@ eval-module2:
 
 oras-pull:
 	cd data && \
-		oras pull localhost:5000/anduin.com/module1:v1.0.1
+		oras pull localhost:5000/anduin.com/module1:${MODULE_1_VERSION}

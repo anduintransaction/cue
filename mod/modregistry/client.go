@@ -307,6 +307,8 @@ func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *M
 		}
 		annotations = annotations0
 	}
+	annotations = c.anduin.mergeManifestAnnotations(annotations)
+
 	loc, err := c.resolve(m.mv)
 	if err != nil {
 		return err

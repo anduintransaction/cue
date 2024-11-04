@@ -7,7 +7,7 @@ source: {
 }
 deps: {
 	"dev.anduintransact.com/module1@v1": {
-		v:       "v1.0.1"
+		v:       "v1.0.3"
 		default: true
 	}
 }

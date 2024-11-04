@@ -8,6 +8,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,10 @@ import (
 	"cuelang.org/go/mod/module"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+)
+
+const (
+	cueModuleAnnotationFileEnv = "ANDUIN_CUE_MODULE_ANNOTATION_FILE"
 )
 
 var logging, _ = strconv.ParseBool(os.Getenv("ANDUIN_CUE_DEBUG"))
@@ -87,6 +92,7 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 				Size:        int64(len(data)),
 				Annotations: annotation,
 			}
+			logf("pushing data layer for file %s", zf.Name)
 			if _, err := loc.Registry.PushBlob(ctx, loc.Repository, dataLayer, bytes.NewReader(data)); err != nil {
 				return fmt.Errorf("cannot push oras data layer: %v", err)
 			}
@@ -122,6 +128,36 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 	m.zipr = zr
 
 	return orasLayers, nil
+}
+
+func (p *anduinPatch) mergeManifestAnnotations(annotations map[string]string) map[string]string {
+	annotationsFile := resolveModuleAnnotationFile()
+	f, err := os.Open(annotationsFile)
+	if err != nil && !os.IsNotExist(err) {
+		logf("warn: unable to open manifest annotations file. File: `%s`. Err: %v", annotationsFile, err)
+		return annotations
+	}
+	defer f.Close()
+	logf("reading manifest annotations file: %s", annotationsFile)
+
+	r := json.NewDecoder(f)
+	var content struct {
+		Manifest map[string]string `json:"$manifest"`
+	}
+	if err := r.Decode(&content); err != nil {
+		logf("warn: unable to parse manifest annotations file. Err :%v", err)
+		return annotations
+	}
+
+	// merging values
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations["com.anduintransact.annotations.file"] = annotationsFile
+	for key, val := range content.Manifest {
+		annotations[key] = val
+	}
+	return annotations
 }
 
 func shouldRepackFile(zf *zip.File) bool {
@@ -160,6 +196,15 @@ func validateModVersion(mv module.Version, mf *modfile.File) (string, bool) {
 	}
 
 	return major, true
+}
+
+func resolveModuleAnnotationFile() string {
+	envFile := os.Getenv(cueModuleAnnotationFileEnv)
+	if envFile != "" {
+		return envFile
+	}
+	// default to cwd `annotations.json`
+	return "annotations.json"
 }
 
 func logf(f string, a ...any) {

@@ -153,7 +153,6 @@ func (p *anduinPatch) mergeManifestAnnotations(annotations map[string]string) ma
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations["com.anduintransact.annotations.file"] = annotationsFile
 	for key, val := range content.Manifest {
 		annotations[key] = val
 	}

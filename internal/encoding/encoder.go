@@ -80,7 +80,9 @@ func NewEncoder(ctx *cue.Context, f *build.File, cfg *Config) (*Encoder, error) 
 	case "":
 	case build.OpenAPI:
 		// TODO: get encoding options
-		cfg := &openapi.Config{}
+		cfg := &openapi.Config{
+			ExpandReferences: cfg.InlineImports,
+		}
 		e.interpret = func(v cue.Value) (*ast.File, error) {
 			return openapi.Generate(v, cfg)
 		}

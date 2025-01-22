@@ -7,6 +7,7 @@ cmd/cue/cue
 **/.DS_Store
 **/*.exe
 **/.debug
+**/testdata/**/*.yaml
 
 # We use test module paths like mod.test or externalmod.test.
 # Don't exclude those as if they were test binaries.

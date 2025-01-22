@@ -28,9 +28,7 @@ import (
 	"cuelang.org/go/internal/cuetxtar"
 )
 
-var (
-	matrix = cuetdtest.FullMatrix
-)
+var matrix = cuetdtest.FullMatrix
 
 func TestGenerateOpenAPI(t *testing.T) {
 	test := cuetxtar.TxTarTest{
@@ -167,7 +165,7 @@ func TestX(t *testing.T) {
 		t.Fatal(errors.Details(err, nil))
 	}
 
-	var out = &bytes.Buffer{}
+	out := &bytes.Buffer{}
 	_ = json.Indent(out, b, "", "   ")
 	t.Error(out.String())
 }

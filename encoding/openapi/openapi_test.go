@@ -38,6 +38,7 @@ func TestParseDefinitions(t *testing.T) {
 		Version string `json:"version"`
 	}{"test", "v1"}
 	defaultConfig := &openapi.Config{}
+	default31Config := &openapi.Config{Version: "3.1.0"}
 	resolveRefs := &openapi.Config{Info: info, ExpandReferences: true}
 
 	testCases := []struct {
@@ -72,6 +73,10 @@ func TestParseDefinitions(t *testing.T) {
 		in:     "array.cue",
 		out:    "array.json",
 		config: defaultConfig,
+	}, {
+		in:     "array.cue",
+		out:    "array-v3.1.0.json",
+		config: default31Config,
 	}, {
 		in:     "enum.cue",
 		out:    "enum.json",

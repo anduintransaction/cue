@@ -262,16 +262,13 @@ func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *M
 	}
 	// Upload the actual module's content
 	// TODO should we use a custom media type for this?
-	configDesc, err := c.scratchConfig(ctx, loc, moduleArtifactType)
-	if err != nil {
-		return fmt.Errorf("cannot make scratch config: %v", err)
-	}
+	configDescRequest := c.scratchConfig(ctx, loc, moduleArtifactType)
 	manifest := &ocispec.Manifest{
 		Versioned: specs.Versioned{
 			SchemaVersion: 2, // historical value. does not pertain to OCI or docker version
 		},
 		MediaType: ocispec.MediaTypeImageManifest,
-		Config:    configDesc,
+		Config:    configDescRequest.desc,
 		// One for self, one for module file.
 		Layers: append(
 			orasDescriptors,
@@ -289,11 +286,12 @@ func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *M
 		Annotations: annotations,
 	}
 
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, zipContentLayer(manifest), io.NewSectionReader(m.blobr, 0, m.size)); err != nil {
-		return fmt.Errorf("cannot push module contents: %v", err)
-	}
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, moduleFileLayer(manifest), bytes.NewReader(m.modFileContent)); err != nil {
-		return fmt.Errorf("cannot push cue.mod/module.cue contents: %v", err)
+	if err := parallelPushBlob(ctx, loc, []*pushBlobRequest{
+		configDescRequest,
+		{zipContentLayer(manifest), io.NewSectionReader(m.blobr, 0, m.size)},
+		{moduleFileLayer(manifest), bytes.NewBuffer(m.modFileContent)},
+	}); err != nil {
+		return err
 	}
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
@@ -454,6 +452,7 @@ func (c *Client) resolve(m module.Version) (RegistryLocation, error) {
 	if loc.Tag == "" {
 		loc.Tag = "latest"
 	}
+	loc.Registry = &loggedRegistry{loc.Registry}
 	return loc, nil
 }
 
@@ -509,7 +508,7 @@ func isJSON(mediaType string) bool {
 // scratchConfig returns a dummy configuration consisting only of the
 // two-byte configuration {}.
 // https://github.com/opencontainers/image-spec/blob/main/manifest.md#example-of-a-scratch-config-or-layer-descriptor
-func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaType string) (ocispec.Descriptor, error) {
+func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaType string) *pushBlobRequest {
 	// TODO check if it exists already to avoid push?
 	content := []byte("{}")
 	desc := ocispec.Descriptor{
@@ -517,10 +516,10 @@ func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaT
 		MediaType: mediaType,
 		Size:      int64(len(content)),
 	}
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, desc, bytes.NewReader(content)); err != nil {
-		return ocispec.Descriptor{}, err
+	return &pushBlobRequest{
+		desc: desc,
+		r:    bytes.NewReader(content),
 	}
-	return desc, nil
 }
 
 // singleResolver implements Resolver by always returning R,

@@ -54,15 +54,18 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 	zw := zip.NewWriter(repackZip)
 
 	// oras only layers
-	orasLayers := []ocispec.Descriptor{}
 
 	logf("valid files: %v", m.validFiles)
-	for _, zf := range m.zipr.File {
+	blobPusher := newParallelBlobPusher(ctx, loc)
+
+	for idx, zf := range m.zipr.File {
 		// only handle valid file
 		if !slices.Contains(m.validFiles, zf.Name) {
 			continue
 		}
 
+		// sequentialy adding file to zip file
+		// but parallel uploading to docker registry
 		err := func() error {
 			rc, err := zf.Open()
 			if err != nil {
@@ -77,7 +80,9 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 				return err
 			}
 
-			// only add cue file to repack zip
+			// only add related cue file to repack zip
+			// this repack must executed sequentialy
+			// zip writer is not thread safe
 			if shouldRepackFile(zf) {
 				if err := addFileToRepack(zw, zf.Name, bytes.NewReader(data)); err != nil {
 					return err
@@ -92,19 +97,25 @@ func (p *anduinPatch) repackZipFile(repackZip *os.File, ctx context.Context, m *
 				Size:        int64(len(data)),
 				Annotations: annotation,
 			}
-			logf("pushing data layer for file %s", zf.Name)
-			if _, err := loc.Registry.PushBlob(ctx, loc.Repository, dataLayer, bytes.NewReader(data)); err != nil {
-				return fmt.Errorf("cannot push oras data layer: %v", err)
-			}
-			orasLayers = append(orasLayers, dataLayer)
 
+			// parallel push blob
+			blobPusher.run(idx, &pushBlobRequest{
+				desc: dataLayer,
+				r:    bytes.NewReader(data),
+			})
 			return nil
 		}()
 		if err != nil {
 			return nil, err
 		}
-
 	}
+
+	// wait for all blob uploading finished
+	orasLayers, err := blobPusher.wait()
+	if err != nil {
+		return nil, err
+	}
+	logf("finished paralled pushing %d data layer", len(orasLayers))
 
 	if err := zw.Close(); err != nil {
 		return nil, fmt.Errorf("cannot flush repack zip file: %v", err)
@@ -160,7 +171,11 @@ func (p *anduinPatch) mergeManifestAnnotations(annotations map[string]string) ma
 }
 
 func shouldRepackFile(zf *zip.File) bool {
-	return strings.HasSuffix(zf.Name, ".cue") || strings.ToLower(zf.Name) == "license"
+	return strings.HasSuffix(zf.Name, ".cue") ||
+		strings.HasSuffix(zf.Name, ".json") ||
+		strings.HasSuffix(zf.Name, ".yaml") ||
+		strings.HasSuffix(zf.Name, ".yml") ||
+		strings.ToLower(zf.Name) == "license"
 }
 
 func addFileToRepack(zr *zip.Writer, name string, r io.Reader) error {

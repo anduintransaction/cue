@@ -58,7 +58,6 @@ type buildContext struct {
 	// TODO: consider an option in the CUE API where optional fields are
 	// recursively evaluated.
 	cycleNodes []*adt.Vertex
-	version    string
 }
 
 type externalType struct {
@@ -104,14 +103,12 @@ func schemas(g *Generator, inst cue.InstanceOrValue) (schemas *ast.StructLit, er
 		schemas:      &orderedMap{},
 		externalRefs: map[string]*externalType{},
 		fieldFilter:  fieldFilter,
-		version:      g.Version,
 	}
 
 	switch g.Version {
 	case "3.0.0":
 		c.exclusiveBool = true
 	case "3.1.0":
-		c.exclusiveBool = false
 	default:
 		return nil, errors.Newf(token.NoPos, "unsupported version %s", g.Version)
 	}
@@ -494,7 +491,7 @@ func (b *builder) disjunction(a []cue.Value, f typeFunc) {
 		switch {
 		case v.Null() == nil:
 			// TODO: for JSON schema, we need to fall through.
-			nullable = b.setNullable()
+			nullable = true
 
 		case isConcrete(v):
 			enums = append(enums, b.decode(v))
@@ -611,7 +608,7 @@ func (b *builder) dispatch(f typeFunc, v cue.Value) {
 	case cue.NullKind:
 		// TODO: for JSON schema we would set the type here. For OpenAPI,
 		// it must be nullable.
-		_ = b.setNullable()
+		b.setSingle("nullable", ast.NewBool(true), true)
 
 	case cue.BoolKind:
 		b.setType("boolean", "")
@@ -826,7 +823,7 @@ func (b *builder) array(v cue.Value) {
 		// TODO: per-item schema are not allowed in OpenAPI, only in JSON Schema.
 		// Perhaps we should turn this into an OR after first normalizing
 		// the entries.
-		b.setFixedLengthItems(items)
+		b.set("items", ast.NewList(items...))
 		// panic("per-item types not supported in OpenAPI")
 	}
 
@@ -851,8 +848,11 @@ func (b *builder) array(v cue.Value) {
 				core = b.core.items
 			}
 			t := b.schema(core, cue.AnyString, typ)
-			hasPrefix := len(items) > 0
-			b.setRemainingItems(t, hasPrefix)
+			if len(items) > 0 {
+				b.setFilter("Schema", "additionalItems", t) // Not allowed in structural.
+			} else if !b.isNonCore() || len(t.Elts) > 0 {
+				b.setSingle("items", t, true)
+			}
 		}
 	}
 }
@@ -913,7 +913,7 @@ func (b *builder) number(v cue.Value) {
 
 	case cue.NotEqualOp:
 		i := b.big(a[0])
-		b.setNot("allOf", ast.NewList(
+		b.setNot("allOff", ast.NewList(
 			b.kv("minimum", i),
 			b.kv("maximum", i),
 		))
@@ -1068,8 +1068,6 @@ type builder struct {
 	keys       []string
 	properties map[string]*builder
 	items      *builder
-
-	nullable bool
 }
 
 func newRootBuilder(c *buildContext) *builder {
@@ -1107,15 +1105,9 @@ func setType(t *orderedMap, b *builder) {
 	if b.typ != "" {
 		if b.core == nil || (b.core.typ != b.typ && !b.ctx.structural) {
 			if !t.exists("type") {
-				if b.nullable {
-					t.setExpr("type", ast.NewList(ast.NewString(b.typ), ast.NewString("null")))
-				} else {
-					t.setExpr("type", ast.NewString(b.typ))
-				}
+				t.setExpr("type", ast.NewString(b.typ))
 			}
 		}
-	} else if b.nullable {
-		t.setExpr("type", ast.NewString("null"))
 	}
 	if b.format != "" {
 		if b.core == nil || b.core.format != b.format {

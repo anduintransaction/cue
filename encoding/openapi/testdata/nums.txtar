@@ -48,7 +48,7 @@ import "math"
          "neq": {
             "type": "number",
             "not": {
-               "allOf": [
+               "allOff": [
                   {
                      "minimum": 4
                   },

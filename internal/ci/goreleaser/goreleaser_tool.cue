@@ -9,8 +9,6 @@ import (
 	"tool/exec"
 	"tool/os"
 	"tool/cli"
-
-	"cuelang.org/go/internal/ci/repo"
 )
 
 command: release: {
@@ -55,18 +53,7 @@ command: release: {
 	}
 
 	let goreleaserCmd = [
-		"goreleaser", "release", "-f", "-", "--clean",
-
-		// Only run the full release when running on GitHub actions for a release tag.
-		// Keep in sync with repo.releaseTagPattern, which is a globbing pattern
-		// rather than a regular expression.
-		//
-		// TODO: Once there is a "goreleaser test" command,
-		// switch to that instead of our workaround via "goreleaser release --snapshot".
-		// See: https://github.com/goreleaser/goreleaser/issues/2355
-		if _githubRef !~ "refs/tags/\(repo.releaseTagPrefix).*" {
-			"--snapshot"
-		},
+		"goreleaser", "release", "-f", "-", "--clean", "--snapshot",
 	]
 	let goreleaserConfigYAML = yaml.Marshal(config & {
 		#latest: _githubRefName == strings.TrimSpace(latestCUE.stdout)

@@ -35,9 +35,7 @@ language: version: "v0.8.0"
 
 package e
 
-a: _ @embed(file=foo.txt)
--- _registry/example.com_e_v0.0.1/foo.txt --
-hello
+a: "hello"
 -- out/eval --
 a: {
     x: 34
@@ -45,7 +43,4 @@ a: {
 b: {
     x: 35
 }
-c: """
-    hello
-
-    """
+c: "hello"

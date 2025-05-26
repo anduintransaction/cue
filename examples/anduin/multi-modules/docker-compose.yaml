@@ -1,0 +1,8 @@
+services:
+  zot:
+    image: ghcr.io/project-zot/zot-linux-amd64:v2.1.1
+    ports:
+      - 5000:5000
+    volumes:
+      - ./docker/config.json:/etc/zot/config.json
+      - ./docker/htpasswd:/etc/zot/htpasswd

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"cuelabs.dev/go/oci/ociregistry"
@@ -50,6 +51,8 @@ var ErrNotFound = fmt.Errorf("module not found")
 // provides a store for CUE modules.
 type Client struct {
 	resolver Resolver
+
+	anduin *anduinPatch
 }
 
 // Resolver resolves module paths to a registry and a location
@@ -95,17 +98,25 @@ const (
 // NewClient returns a new client that talks to the registry at the given
 // hostname.
 func NewClient(registry ociregistry.Interface) *Client {
-	return &Client{
+	c := &Client{
 		resolver: singleResolver{registry},
 	}
+	c.anduin = &anduinPatch{
+		originalClient: c,
+	}
+	return c
 }
 
 // NewClientWithResolver returns a new client that uses the given
 // resolver to decide which registries to fetch from or push to.
 func NewClientWithResolver(resolver Resolver) *Client {
-	return &Client{
+	c := &Client{
 		resolver: resolver,
 	}
+	c.anduin = &anduinPatch{
+		originalClient: c,
+	}
+	return c
 }
 
 // Mirror ensures that the given module and its component parts
@@ -212,12 +223,9 @@ func (c *Client) GetModuleWithManifest(m module.Version, contents []byte, mediaT
 	if !isModule(manifest) {
 		return nil, fmt.Errorf("%v does not resolve to a manifest (media type is %q)", m, mediaType)
 	}
-	// TODO check type of manifest too.
-	if n := len(manifest.Layers); n != 2 {
-		return nil, fmt.Errorf("module manifest should refer to exactly two blobs, but got %d", n)
-	}
-	if !isModuleFile(manifest.Layers[1]) {
-		return nil, fmt.Errorf("unexpected media type %q for module file blob", manifest.Layers[1].MediaType)
+	moduleLayer := moduleFileLayer(manifest)
+	if !isModuleFile(moduleLayer) {
+		return nil, fmt.Errorf("unexpected media type %q for module file blob", moduleLayer.MediaType)
 	}
 	// TODO check that the other blobs are of the expected type (application/zip).
 	return &Module{
@@ -285,11 +293,12 @@ type checkedModule struct {
 	zipr           *zip.Reader
 	modFile        *modfile.File
 	modFileContent []byte
+	validFiles     []string
 }
 
 // putCheckedModule is like [Client.PutModule] except that it allows the
 // caller to do some additional checks (see [CheckModule] for more info).
-func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *Metadata) error {
+func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *Metadata, orasDescriptors []ocispec.Descriptor) error {
 	var annotations map[string]string
 	if meta != nil {
 		annotations0, err := meta.annotations()
@@ -298,6 +307,8 @@ func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *M
 		}
 		annotations = annotations0
 	}
+	annotations = c.anduin.mergeManifestAnnotations(annotations)
+
 	loc, err := c.resolve(m.mv)
 	if err != nil {
 		return err
@@ -308,34 +319,36 @@ func (c *Client) putCheckedModule(ctx context.Context, m *checkedModule, meta *M
 	}
 	// Upload the actual module's content
 	// TODO should we use a custom media type for this?
-	configDesc, err := c.scratchConfig(ctx, loc, moduleArtifactType)
-	if err != nil {
-		return fmt.Errorf("cannot make scratch config: %v", err)
-	}
+	configDescRequest := c.scratchConfig(ctx, loc, moduleArtifactType)
 	manifest := &ocispec.Manifest{
 		Versioned: specs.Versioned{
 			SchemaVersion: 2, // historical value. does not pertain to OCI or docker version
 		},
 		MediaType: ocispec.MediaTypeImageManifest,
-		Config:    configDesc,
+		Config:    configDescRequest.desc,
 		// One for self, one for module file.
-		Layers: []ocispec.Descriptor{{
-			Digest:    selfDigest,
-			MediaType: "application/zip",
-			Size:      m.size,
-		}, {
-			Digest:    digest.FromBytes(m.modFileContent),
-			MediaType: moduleFileMediaType,
-			Size:      int64(len(m.modFileContent)),
-		}},
+		Layers: append(
+			orasDescriptors,
+			ocispec.Descriptor{
+				Digest:    selfDigest,
+				MediaType: "application/zip",
+				Size:      m.size,
+			},
+			ocispec.Descriptor{
+				Digest:    digest.FromBytes(m.modFileContent),
+				MediaType: moduleFileMediaType,
+				Size:      int64(len(m.modFileContent)),
+			},
+		),
 		Annotations: annotations,
 	}
 
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, manifest.Layers[0], io.NewSectionReader(m.blobr, 0, m.size)); err != nil {
-		return fmt.Errorf("cannot push module contents: %v", err)
-	}
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, manifest.Layers[1], bytes.NewReader(m.modFileContent)); err != nil {
-		return fmt.Errorf("cannot push cue.mod/module.cue contents: %v", err)
+	if err := parallelPushBlob(ctx, loc, []*pushBlobRequest{
+		configDescRequest,
+		{zipContentLayer(manifest), io.NewSectionReader(m.blobr, 0, m.size)},
+		{moduleFileLayer(manifest), bytes.NewBuffer(m.modFileContent)},
+	}); err != nil {
+		return err
 	}
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
@@ -363,7 +376,20 @@ func (c *Client) PutModuleWithMetadata(ctx context.Context, m module.Version, r 
 	if err != nil {
 		return err
 	}
-	return c.putCheckedModule(ctx, cm, meta)
+
+	repackZip, err := os.CreateTemp("", "cue-repack-publish-")
+	if err != nil {
+		return fmt.Errorf("unable to create temp repack zip file: %v", err)
+	}
+	defer os.Remove(repackZip.Name())
+	defer repackZip.Close()
+
+	orasDescriptors, err := c.anduin.repackZipFile(repackZip, ctx, cm)
+	if err != nil {
+		return err
+	}
+
+	return c.putCheckedModule(ctx, cm, meta, orasDescriptors)
 }
 
 // checkModule checks a module's zip file before uploading it.
@@ -374,7 +400,7 @@ func (c *Client) PutModuleWithMetadata(ctx context.Context, m module.Version, r 
 // Note that the returned [CheckedModule] value contains r, so will
 // be invalidated if r is closed.
 func checkModule(m module.Version, blobr io.ReaderAt, size int64) (*checkedModule, error) {
-	zipr, modf, _, err := modzip.CheckZip(m, blobr, size)
+	zipr, modf, stats, err := modzip.CheckZip(m, blobr, size)
 	if err != nil {
 		return nil, fmt.Errorf("module zip file check failed: %v", err)
 	}
@@ -389,6 +415,7 @@ func checkModule(m module.Version, blobr io.ReaderAt, size int64) (*checkedModul
 		zipr:           zipr,
 		modFile:        mf,
 		modFileContent: modFileContent,
+		validFiles:     stats.Valid,
 	}, nil
 }
 
@@ -410,8 +437,7 @@ func checkModFile(m module.Version, f *zip.File) ([]byte, *modfile.File, error) 
 	if mf.QualifiedModule() != m.Path() {
 		return nil, nil, fmt.Errorf("module path %q found in %s does not match module path being published %q", mf.QualifiedModule(), f.Name, m.Path())
 	}
-	wantMajor := semver.Major(m.Version())
-	if major := mf.MajorVersion(); major != wantMajor {
+	if major, ok := validateModVersion(m, mf); !ok {
 		// This can't actually happen because the zip checker checks the major version
 		// that's being published to, so the above path check also implicitly checks that.
 		return nil, nil, fmt.Errorf("major version %q found in %s does not match version being published %q", major, f.Name, m.Version())
@@ -442,7 +468,7 @@ func (m *Module) Version() module.Version {
 
 // ModuleFile returns the contents of the cue.mod/module.cue file.
 func (m *Module) ModuleFile(ctx context.Context) ([]byte, error) {
-	r, err := m.loc.Registry.GetBlob(ctx, m.loc.Repository, m.manifest.Layers[1].Digest)
+	r, err := m.loc.Registry.GetBlob(ctx, m.loc.Repository, moduleFileLayer(&m.manifest).Digest)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +487,7 @@ func (m *Module) Metadata() (*Metadata, error) {
 // and the contents should not be assumed to be correct until the close
 // error has been checked.
 func (m *Module) GetZip(ctx context.Context) (io.ReadCloser, error) {
-	return m.loc.Registry.GetBlob(ctx, m.loc.Repository, m.manifest.Layers[0].Digest)
+	return m.loc.Registry.GetBlob(ctx, m.loc.Repository, zipContentLayer(&m.manifest).Digest)
 }
 
 // ManifestDigest returns the digest of the manifest representing
@@ -482,8 +508,9 @@ func (c *Client) resolve(m module.Version) (RegistryLocation, error) {
 		return RegistryLocation{}, fmt.Errorf("module %v unexpectedly resolved to empty location", m)
 	}
 	if loc.Tag == "" {
-		return RegistryLocation{}, fmt.Errorf("module %v unexpectedly resolved to empty tag", m)
+		loc.Tag = "latest"
 	}
+	loc.Registry = &loggedRegistry{loc.Registry}
 	return loc, nil
 }
 
@@ -539,7 +566,7 @@ func isJSON(mediaType string) bool {
 // scratchConfig returns a dummy configuration consisting only of the
 // two-byte configuration {}.
 // https://github.com/opencontainers/image-spec/blob/main/manifest.md#example-of-a-scratch-config-or-layer-descriptor
-func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaType string) (ocispec.Descriptor, error) {
+func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaType string) *pushBlobRequest {
 	// TODO check if it exists already to avoid push?
 	content := []byte("{}")
 	desc := ocispec.Descriptor{
@@ -547,10 +574,10 @@ func (c *Client) scratchConfig(ctx context.Context, loc RegistryLocation, mediaT
 		MediaType: mediaType,
 		Size:      int64(len(content)),
 	}
-	if _, err := loc.Registry.PushBlob(ctx, loc.Repository, desc, bytes.NewReader(content)); err != nil {
-		return ocispec.Descriptor{}, err
+	return &pushBlobRequest{
+		desc: desc,
+		r:    bytes.NewReader(content),
 	}
-	return desc, nil
 }
 
 // singleResolver implements Resolver by always returning R,

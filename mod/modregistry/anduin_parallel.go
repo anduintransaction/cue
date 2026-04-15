@@ -42,28 +42,42 @@ func (w *parallelWorker[T]) run(taskId int, task func(context.Context) (T, error
 		defer w.wg.Done()
 		resp, err := task(w.ctx)
 		if err != nil {
-			w.errCh <- err
+			// Non-blocking send: if wait() has already cancelled on a
+			// prior error and stopped reading errCh, we must not block
+			// here or the worker goroutine leaks forever. wg.Done runs
+			// via defer either way, so wait() still terminates.
+			select {
+			case w.errCh <- err:
+			case <-w.ctx.Done():
+			}
 			return
 		}
-		w.respCh <- &taskResponse[T]{
+		select {
+		case w.respCh <- &taskResponse[T]{
 			taskId:   taskId,
 			response: resp,
+		}:
+		case <-w.ctx.Done():
 		}
 	}()
 }
 
-func (w *parallelWorker[T]) close() {
-	close(w.errCh)
-	close(w.respCh)
-}
-
 func (w *parallelWorker[T]) wait() ([]T, error) {
-	defer w.close()
+	// Signal every worker to stop on return and block until they have
+	// all left their channel sends. Only then is it safe to close the
+	// channels, otherwise a late worker would panic sending on a closed
+	// channel.
+	defer func() {
+		w.cancel()
+		w.wg.Wait()
+		close(w.errCh)
+		close(w.respCh)
+	}()
 
-	done := make(chan struct{}, 1)
+	done := make(chan struct{})
 	go func() {
 		w.wg.Wait()
-		done <- struct{}{}
+		close(done)
 	}()
 
 	var err error
@@ -82,9 +96,15 @@ func (w *parallelWorker[T]) wait() ([]T, error) {
 				resp[idx] = r.response
 			}
 			return resp, err
-		case err = <-w.errCh:
-			w.cancel()
-			done <- struct{}{}
+		case e := <-w.errCh:
+			// First error wins. Cancel the context so any still-running
+			// workers abort, then keep draining respCh/errCh until the
+			// wg watcher signals `done`. Do not touch `done` here — the
+			// watcher owns it.
+			if err == nil {
+				err = e
+				w.cancel()
+			}
 		case data := <-w.respCh:
 			taskResps = append(taskResps, data)
 		}
